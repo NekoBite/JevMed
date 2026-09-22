@@ -43,6 +43,10 @@ dig +short jevmed.trilumi.xyz
 
 It must print `212.85.27.147`.
 
+> **Status: done.** As of 2026-09-22 this record is live and verified on both
+> authoritative servers and from 8.8.8.8 / 1.1.1.1 / 9.9.9.9, with no AAAA and no
+> CNAME. A stale AAAA would break issuance, since Let's Encrypt prefers IPv6.
+
 ## 2. Prepare the deploy key
 
 The VPS already authorises `~/.ssh/claude_deploy` for `root`. For CI, prefer a
@@ -62,11 +66,17 @@ ssh-copy-id -i ~/.ssh/jevmed_deploy.pub root@212.85.27.147
 
 ## 3. Bootstrap the VPS
 
+The repository is **private** and the VPS holds no GitHub credential, so copy the
+deploy directory up rather than cloning on the box. That keeps the VPS free of any
+credential it does not need:
+
 ```bash
-ssh -i ~/.ssh/claude_deploy root@212.85.27.147
-git clone git@github.com:NekoBite/jevmed-erp.git /tmp/jevmed-src
-sudo bash /tmp/jevmed-src/deploy/setup-vps.sh
+# from your Mac, in the repo root
+scp -i ~/.ssh/claude_deploy -r deploy root@212.85.27.147:/tmp/jevmed-deploy
+ssh -i ~/.ssh/claude_deploy root@212.85.27.147 'bash /tmp/jevmed-deploy/setup-vps.sh'
 ```
+
+(If you would rather clone on the VPS, add a **read-only** deploy key for it first.)
 
 The script refuses to run if the host is not what it expects — no `dnf`, lsws
 not running, an active nginx, or no system-wide Node ≥ 20 all abort before

@@ -32,6 +32,7 @@ Fixed requirements from the client:
 **Built and verified locally. Nothing deployed yet.**
 
 - Clean working tree on `main`, pushed to `github.com/NekoBite/jevmed-erp` (private)
+- DNS live: `jevmed.trilumi.xyz` → `212.85.27.147`, verified authoritatively
 - `npm ci`, `npm run build`, `npm start` and the smoke test all confirmed **on this Mac**
 - Smoke test passes: 64 checks — 5 roles × 8 pages × 3 languages, headless Chromium
 - Assistant has only ever run in **demonstration mode** — no API key has been stored anywhere
@@ -47,7 +48,7 @@ No database — the dataset ships in the bundle, and the only durable server sta
 | Seeded synthetic dataset | Done — 32 patients, 117 encounters, 1184 labs, 64 invoices |
 | Assistant + streaming proxy | Done, untested against a live provider key |
 | Encrypted key vault + console | Done |
-| CI pipeline | Written, never run |
+| CI pipeline | `verify` green on a clean runner; `deploy` never succeeded (no secrets yet) |
 | VPS bootstrap, systemd, OpenLiteSpeed vhost | Rewritten for the real host; dry-run verified, not yet run on the VPS |
 
 ---
@@ -141,34 +142,31 @@ leave it in for CI and container runs.
 
 ## Next Steps
 
-Step 1 is blocking and is the only one that cannot be done from this machine.
+~~1. **Add the DNS A record.**~~ **Done 2026-09-22.** `jevmed.trilumi.xyz` → `212.85.27.147`,
+   A record, TTL 3300. Verified on both authoritative servers (`ns1/ns2.dns-parking.com`) and
+   from 8.8.8.8 / 1.1.1.1 / 9.9.9.9. No AAAA and no CNAME, which matters — Let's Encrypt
+   prefers IPv6 and would fail the challenge against a stale AAAA.
 
-1. **Add the DNS A record — owner action, in Hostinger hPanel.**
-   Domains → DNS for `trilumi.xyz`: type `A`, name `jevmed`, value `212.85.27.147`, TTL 300.
-   `trilumi.xyz` is on `ns1/ns2.dns-parking.com`, so the zone lives in hPanel and **cannot be
-   edited over SSH**. Verify before step 2, or the ACME challenge fails:
+1. **Bootstrap the VPS.** The repo is private and the VPS holds no GitHub credential, so
+   copy the deploy files up rather than cloning — that keeps the box credential-free:
    ```bash
-   dig +short jevmed.trilumi.xyz    # must print 212.85.27.147
-   ```
-
-2. **Bootstrap the VPS.**
-   ```bash
-   ssh -i ~/.ssh/claude_deploy root@212.85.27.147
-   git clone git@github.com:NekoBite/jevmed-erp.git /tmp/jevmed-src
-   sudo bash /tmp/jevmed-src/deploy/setup-vps.sh
+   # from this Mac, in the repo root
+   scp -i ~/.ssh/claude_deploy -r deploy root@212.85.27.147:/tmp/jevmed-deploy
+   ssh -i ~/.ssh/claude_deploy root@212.85.27.147 'bash /tmp/jevmed-deploy/setup-vps.sh'
    ```
    It refuses to run on the wrong kind of host, backs up `httpd_config.conf`, and restores it
    automatically if `https://trilumi.xyz/` stops answering. It prints the key-console URL
    **once** — capture it. Recoverable afterwards only by reading `VAULT_PATH` from
    `/opt/jevmed/shared/.env`.
 
-3. **Add five repository secrets** under Settings → Secrets and variables → Actions:
+2. **Add five repository secrets** under Settings → Secrets and variables → Actions:
    `VPS_HOST` (`212.85.27.147`), `VPS_USER`, `VPS_SSH_KEY` (private key), `VPS_SSH_PORT` (`22`),
    `VPS_APP_DIR` (`/opt/jevmed`).
 
-4. **Push to `main`** to trigger the first deploy. CI has never run; expect to iterate once.
+3. **Re-run the workflow** once the secrets exist. CI's `verify` job already passes on a
+   clean runner (run 35746882630); only `deploy` has never succeeded.
 
-5. **Finish the passphrase hash.** On a first run `setup-vps.sh` cannot hash the passphrase
+4. **Finish the passphrase hash.** On a first run `setup-vps.sh` cannot hash the passphrase
    (the app is not deployed yet) and leaves a placeholder. After the first successful deploy:
    ```bash
    cd /opt/jevmed/current
@@ -177,7 +175,7 @@ Step 1 is blocking and is the only one that cannot be done from this machine.
    ```
    Until this is done the console is disabled and the assistant stays in demonstration mode.
 
-6. **Store an API key** in the console and exercise the live provider path — this is the one
+5. **Store an API key** in the console and exercise the live provider path — this is the one
    code path never run end to end.
 
 ### Open decisions
