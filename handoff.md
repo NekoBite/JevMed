@@ -164,7 +164,7 @@ leave it in for CI and container runs.
    `/opt/jevmed`. **`VPS_SSH_KEY` still holds the wrong key** and must be replaced with the
    dedicated CI key:
    ```bash
-   gh secret set VPS_SSH_KEY --repo NekoBite/jevmed-erp < ~/.ssh/jevmed_ci
+   gh secret set VPS_SSH_KEY --repo NekoBite/jevmed-erp < ~/.ssh/jevmed-deploy
    ```
 
 2. **Re-run the workflow** once the secrets exist. CI's `verify` job already passes on a
@@ -190,7 +190,7 @@ leave it in for CI and container runs.
 - **Chairman record access.** `src/lib/roles.ts` blocks the Board Chairman from opening an
   identified patient record. Deliberate, and one line to change if the client objects.
 - **Deploy account.** CI deploys as `jevmed-deploy` (uid 5012) on the VPS, not root —
-  the box runs ~24 production sites. Key `~/.ssh/jevmed_ci`, verified to authenticate as
+  the box runs ~24 production sites. Key `~/.ssh/jevmed-deploy`, verified to authenticate as
   that user and be refused as root. Its only privilege is the sudoers rule `setup-vps.sh`
   installs: restart the `jevmed` unit, read its journal, nothing else.
 - **Repository owner.** Pushed to `NekoBite/jevmed-erp` because that is the authenticated

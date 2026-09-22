@@ -53,7 +53,15 @@ It must print `212.85.27.147`.
 this box runs ~24 production sites and a leaked workflow secret must not own it.
 
 - VPS user: **`jevmed-deploy`** (uid 5012, `/home/jevmed-deploy`)
-- Key: `~/.ssh/jevmed_ci` → `VPS_SSH_KEY`
+- Key: `~/.ssh/jevmed-deploy` → `VPS_SSH_KEY`
+
+> The key file and the account are deliberately named the same. They are
+> different things and confusing them has broken this deploy twice: `VPS_USER`
+> is the **Linux account**, never the key filename. A wrong username fails
+> *before* publickey auth, so sshd falls through to password attempts and the
+> log reads `Permission denied, please try again.` — which looks like a bad key
+> but is not. `journalctl -u sshd` on the VPS says `Invalid user <name>` and
+> settles it in one line.
 
 Verified: the key authenticates as `jevmed-deploy` and is **refused** as `root`.
 The only privilege it gains is the narrow sudoers rule §3 installs — restarting
@@ -62,14 +70,14 @@ the `jevmed` unit and reading its journal, nothing else.
 To recreate it from scratch:
 
 ```bash
-ssh-keygen -t ed25519 -f ~/.ssh/jevmed_ci -C "github-actions@jevmed-erp" -N ""
+ssh-keygen -t ed25519 -f ~/.ssh/jevmed-deploy -C "github-actions@jevmed-erp" -N ""
 ssh -i ~/.ssh/claude_deploy root@212.85.27.147 \
   "useradd -m -s /bin/bash jevmed-deploy; \
    install -d -o jevmed-deploy -g jevmed-deploy -m 700 /home/jevmed-deploy/.ssh"
-ssh-copy-id -i ~/.ssh/jevmed_ci.pub -o IdentityFile=~/.ssh/claude_deploy jevmed-deploy@212.85.27.147
+ssh-copy-id -i ~/.ssh/jevmed-deploy.pub -o IdentityFile=~/.ssh/claude_deploy jevmed-deploy@212.85.27.147
 ```
 
-Store the **private** half with `gh secret set VPS_SSH_KEY < ~/.ssh/jevmed_ci` —
+Store the **private** half with `gh secret set VPS_SSH_KEY < ~/.ssh/jevmed-deploy` —
 that never prints the key.
 
 > A GitHub *deploy key* grants a machine read access to the repository — useful
@@ -138,7 +146,7 @@ demonstration mode.
 |---|---|
 | `VPS_HOST` | `212.85.27.147` |
 | `VPS_USER` | `jevmed-deploy` |
-| `VPS_SSH_KEY` | contents of `~/.ssh/jevmed_ci` — set it with `gh secret set VPS_SSH_KEY < ~/.ssh/jevmed_ci` |
+| `VPS_SSH_KEY` | contents of `~/.ssh/jevmed-deploy` — set it with `gh secret set VPS_SSH_KEY < ~/.ssh/jevmed-deploy` |
 | `VPS_SSH_PORT` | `22` — *optional*, the workflow defaults to 22 if unset |
 | `VPS_APP_DIR` | `/opt/jevmed` — *optional*, the workflow defaults to this if unset |
 
