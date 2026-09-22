@@ -29,14 +29,19 @@ Fixed requirements from the client:
 
 ## Current Progress
 
-**Built and verified locally. Nothing deployed yet.**
+**Deployed and live at https://jevmed.trilumi.xyz.**
 
 - Clean working tree on `main`, pushed to `github.com/NekoBite/JevMed` (private)
 - DNS live: `jevmed.trilumi.xyz` → `212.85.27.147`, verified authoritatively
-- VPS bootstrapped; HTTPS live with a valid cert. Serving 503 until the first deploy lands
+- **First successful deploy 2026-09-22** (run 35755860278). Verified from outside:
+  `GET /` → 200 in 190ms, TLS verifies, `<title>JevMed · Medical Record System</title>`,
+  asset hashes matching the bundle CI built. `/api/health` →
+  `{"ok":true,"vaultConfigured":false,"problems":0}`
+- All neighbour sites (`trilumi.xyz`, `reccontent`, `viridis`) still 200 throughout
 - `npm ci`, `npm run build`, `npm start` and the smoke test all confirmed **on this Mac**
 - Smoke test passes: 64 checks — 5 roles × 8 pages × 3 languages, headless Chromium
-- Assistant has only ever run in **demonstration mode** — no API key has been stored anywhere
+- Assistant is still in **demonstration mode** — no API key has been stored anywhere,
+  and `vaultConfigured:false` because the passphrase hash is not set yet
 
 Stack: React 19 + TypeScript + Vite + Tailwind; Express on Node 22 behind **OpenLiteSpeed**.
 No database — the dataset ships in the bundle, and the only durable server state is
@@ -49,8 +54,10 @@ No database — the dataset ships in the bundle, and the only durable server sta
 | Seeded synthetic dataset | Done — 32 patients, 117 encounters, 1184 labs, 64 invoices |
 | Assistant + streaming proxy | Done, untested against a live provider key |
 | Encrypted key vault + console | Done |
-| CI pipeline | `verify` green on a clean runner; `deploy` never succeeded (no secrets yet) |
-| VPS bootstrap, systemd, OpenLiteSpeed vhost | **Run successfully 2026-09-22**; TLS live, idempotent on re-run |
+| CI pipeline | **Both jobs green.** `verify` + `deploy` end to end |
+| VPS bootstrap, systemd, OpenLiteSpeed vhost | **Done 2026-09-22**; TLS live to 2026-12-21, idempotent on re-run |
+| Live deployment | **Done 2026-09-22** — 200, correct bundle, health OK |
+| Key console + live provider call | **Not done** — passphrase hash unset; the only untested path |
 
 ---
 
@@ -133,6 +140,32 @@ comment promised did nothing. Moved to `[Unit]`.
 pass arbitrary flags to journalctl as root, and journalctl's pager escapes to a root shell —
 a full privilege escalation for any non-root deploy user. Now pinned to exact argument lists.
 
+**Eight failed deploys, none of them a code fault.** `verify` passed every time. The
+causes, in order: `VPS_USER` set to a GitHub deploy-key name (`trilumi-ci-deploy`); then to
+a key *filename* (`jevmed_ci`); then a broken `VPS_HOST`; then four attempts where
+`VPS_SSH_KEY` held the key body **without its `-----BEGIN-----`/`-----END-----` lines**.
+
+Two things would have saved hours. First, `VPS_USER` is a **Linux account**, never a key
+filename — and a wrong username is rejected *before* publickey auth, so sshd falls back to
+passwords and the client prints `Permission denied, please try again.`, which looks like a
+bad key. `journalctl -u sshd` on the VPS says `Invalid user <name>` and settles it in one
+line. Second, OpenSSH reports an unparseable key only as `error in libcrypto`, which reads
+as *rejected* rather than *unreadable*.
+
+The fix was to make the workflow diagnose itself rather than keep guessing: it validates the
+key with `ssh-keygen -y` before any ssh call, prints the fingerprint on success, and on
+failure reports byte count, line count and CR count. Those numbers gave the answer
+immediately — 349 bytes / 5 lines against 419 / 7, and the markers are exactly 70 bytes and
+2 lines. It now accepts the key as a PEM, as base64-encoded PEM, or as a bare body it
+rewraps. **Instrument the failure before iterating on it.**
+
+**Following generic SSH setup instructions for a scoped deploy key.** A snippet written for
+`root@host` appended the CI key to `/root/.ssh/authorized_keys`, silently handing GitHub
+Actions root on a box serving ~24 production sites and making the narrow sudoers rule
+pointless. Removed by fingerprint, with the rewrite refusing to install unless the admin key
+survived; backup at `/root/.ssh/authorized_keys.bak-20260922164332`. Re-verified on fresh
+connections: CI key → root **denied**, CI key → `jevmed-deploy` **OK**.
+
 **Playwright's own pinned Chromium.** In the Linux container the first session ran in, `playwright`
 expected build 1243 while only 1194 was present at `/opt/pw-browsers/chromium-1194/chrome-linux/chrome`.
 The smoke test falls back to that path when it exists rather than downloading a second browser. On
@@ -143,50 +176,57 @@ leave it in for CI and container runs.
 
 ## Next Steps
 
-~~1. **Add the DNS A record.**~~ **Done 2026-09-22.** `jevmed.trilumi.xyz` → `212.85.27.147`,
-   A record, TTL 3300. Verified on both authoritative servers (`ns1/ns2.dns-parking.com`) and
-   from 8.8.8.8 / 1.1.1.1 / 9.9.9.9. No AAAA and no CNAME, which matters — Let's Encrypt
-   prefers IPv6 and would fail the challenge against a stale AAAA.
+### Done — 2026-09-22
 
-~~1. **Bootstrap the VPS.**~~ **Done 2026-09-22.** Ran with `DEPLOY_USER=jevmed-deploy`.
-   Created `/opt/jevmed`, the `jevmed` service account, the systemd unit, the sudoers rule,
-   the OpenLiteSpeed vhost (+ `virtualHost` block and a `map` in all three listeners), and a
-   Let's Encrypt cert valid to **2026-12-21**. Canary held throughout: `https://trilumi.xyz/`
-   → 200 before and after. Verified from outside: `https://jevmed.trilumi.xyz/` → **503**
-   (correct — lsws proxy is up, no backend deployed yet), TLS verifies, CN matches; all four
-   neighbour sites still 200. Re-ran it to confirm idempotency: no further config change.
+1. **DNS A record.** `jevmed.trilumi.xyz` → `212.85.27.147`, TTL 3300. Verified on both
+   authoritative servers (`ns1/ns2.dns-parking.com`) and from 8.8.8.8 / 1.1.1.1 / 9.9.9.9.
+   No AAAA and no CNAME, which matters — Let's Encrypt prefers IPv6 and would fail the
+   challenge against a stale AAAA.
 
-   The **key-console URL** is in `VAULT_PATH` in `/opt/jevmed/shared/.env` — read it there.
-   It is deliberately not recorded in this repo.
+2. **VPS bootstrap.** Ran with `DEPLOY_USER=jevmed-deploy`. Created `/opt/jevmed`, the
+   `jevmed` service account, the systemd unit, the sudoers rule, the OpenLiteSpeed vhost
+   (`virtualHost` block + a `map` in all three listeners), and a Let's Encrypt cert valid to
+   **2026-12-21**. Canary held throughout: `https://trilumi.xyz/` → 200 before and after.
+   Re-ran to confirm idempotency — no further config change.
 
-1. **Repository secrets.** `VPS_HOST` and `VPS_USER` are set. `VPS_SSH_PORT` and
-   `VPS_APP_DIR` are unset and can stay that way — the workflow defaults them to `22` and
-   `/opt/jevmed`. **`VPS_SSH_KEY` still holds the wrong key** and must be replaced with the
-   dedicated CI key:
+3. **Repository secrets and first deploy** (run 35755860278). `VPS_HOST`, `VPS_USER` and
+   `VPS_SSH_KEY` set on `NekoBite/JevMed`. `VPS_SSH_PORT` and `VPS_APP_DIR` deliberately
+   unset — the workflow defaults them to `22` and `/opt/jevmed`, and an unset secret renders
+   as an empty string that `${VAR:-default}` handles. Deploy is atomic: upload to
+   `releases/<stamp>`, swap `current`, restart, health-check, auto-rollback, prune to five.
+
+### Remaining
+
+1. **Decide on access control before showing anyone the URL.** See Open decisions — this is
+   now live on the public internet, which changes the question.
+
+2. **Set the passphrase hash.** Until this is done the key console is disabled and the
+   assistant stays in demonstration mode.
    ```bash
-   gh secret set VPS_SSH_KEY --repo NekoBite/JevMed < ~/.ssh/jevmed-deploy
+   ssh -i ~/.ssh/claude_deploy root@212.85.27.147
+   cd /opt/jevmed/current && node server/hash-passphrase.js 'your passphrase'
+   # paste into VAULT_PASSPHRASE_HASH in /opt/jevmed/shared/.env
+   systemctl restart jevmed
    ```
+   Confirm with `curl -s https://jevmed.trilumi.xyz/api/health` — `vaultConfigured` should
+   flip to `true`.
 
-2. **Re-run the workflow** once the secrets exist. CI's `verify` job already passes on a
-   clean runner (run 35746882630); only `deploy` has never succeeded.
-
-3. **Finish the passphrase hash.** On a first run `setup-vps.sh` cannot hash the passphrase
-   (the app is not deployed yet) and leaves a placeholder. After the first successful deploy:
-   ```bash
-   cd /opt/jevmed/current
-   node server/hash-passphrase.js 'your passphrase'
-   # paste into VAULT_PASSPHRASE_HASH in /opt/jevmed/shared/.env, then restart
-   ```
-   Until this is done the console is disabled and the assistant stays in demonstration mode.
-
-4. **Store an API key** in the console and exercise the live provider path — this is the one
-   code path never run end to end.
+3. **Store an API key** in the console and exercise the live provider path. This is the one
+   code path never run end to end. The console URL is `VAULT_PATH` in
+   `/opt/jevmed/shared/.env`; it is deliberately not recorded in this repo.
 
 ### Open decisions
 
-- **Authentication.** Role buttons sign in with no password, by design for a demonstration.
-  If the board demo runs at the public URL where outsiders could reach it, add a shared passcode
-  gate first. Awaiting a decision from OH.
+- **Authentication — now urgent, and the premise has changed.** Role buttons sign in with no
+  password, which was a reasonable choice while this ran on a laptop. It is now reachable by
+  anyone on the internet at `https://jevmed.trilumi.xyz`, and any visitor can click a role and
+  browse the whole record system. The data is entirely synthetic and the footer says so on
+  every page, so this is not a patient-privacy breach — but a medical-record UI sitting open
+  on a public URL invites misreading, and search engines will index it. Cheapest fixes, in
+  order: a shared passcode gate in front of the app; HTTP basic auth at the lsws vhost; or an
+  IP allowlist for the demo. `public/robots.txt` already ships `Disallow: /` and is live, so
+  compliant crawlers will skip it; `X-Robots-Tag: noindex` is absent, which only matters for
+  crawlers that ignore robots.txt. Neither keeps a person out. Awaiting a decision from OH.
 - **Chairman record access.** `src/lib/roles.ts` blocks the Board Chairman from opening an
   identified patient record. Deliberate, and one line to change if the client objects.
 - **Deploy account.** CI deploys as `jevmed-deploy` (uid 5012) on the VPS, not root —
@@ -201,6 +241,8 @@ leave it in for CI and container runs.
 ### Known limits
 
 - Rate limiting is per-process and in memory — needs a shared store behind multiple instances
+- The `production` environment on the repo has no required reviewer, so any push to `main`
+  deploys. Add one under Settings → Environments if that is not wanted
 - The app shares a box with ~24 other sites. A bad `httpd_config.conf` edit takes them all
   down, which is why `setup-vps.sh` backs up and canary-checks rather than editing in place
 - Single instance; a restart is a brief outage, hence the deploy health-check and auto-rollback
