@@ -105,12 +105,25 @@ jobs:
           set -euo pipefail
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
 
-          # tr -d '\r' defends against the most common way this secret arrives
-          # broken: pasted through a web form or a Windows clipboard, which turns
-          # the line endings into CRLF. OpenSSH then cannot parse the base64 body
-          # and reports only "error in libcrypto", which reads like a rejected
-          # key rather than an unreadable one.
-          printf '%s\n' "$SSH_KEY" | tr -d '\r' > ~/.ssh/id_deploy
+          # VPS_SSH_KEY is accepted in EITHER form:
+          #
+          #   1. the PEM key itself, as it appears in the file; or
+          #   2. that same file base64-encoded onto ONE line.
+          #
+          # Form 2 exists because a multi-line private key pasted into a web form
+          # loses content — observed repeatedly here, arriving as 349 bytes / 5
+          # lines instead of 419 / 7, with the line breaks intact but whole lines
+          # gone. A single-line blob has no line structure to lose. Produce it
+          # with:  base64 -i ~/.ssh/jevmed-deploy | tr -d '\n'
+          #
+          # tr -d '\r' still guards form 1 against CRLF from a Windows clipboard.
+          if printf '%s' "$SSH_KEY" | grep -q -- '-----BEGIN'; then
+            printf '%s\n' "$SSH_KEY" | tr -d '\r' > ~/.ssh/id_deploy
+            echo "VPS_SSH_KEY supplied as a PEM key"
+          else
+            printf '%s' "$SSH_KEY" | tr -d '[:space:]' | base64 -d > ~/.ssh/id_deploy 2>/dev/null || true
+            echo "VPS_SSH_KEY supplied base64-encoded; decoded it"
+          fi
           chmod 600 ~/.ssh/id_deploy
 
           # Validate before use, so a malformed secret fails HERE with a message
@@ -123,7 +136,9 @@ jobs:
             echo "::error::mangled — this is not an authorisation failure. Re-set it"
             echo "::error::straight from the file, which preserves it exactly:"
             echo "::error::  gh secret set VPS_SSH_KEY --repo <owner>/<repo> < ~/.ssh/jevmed-deploy"
-            echo "::error::Do not paste a private key into the web UI; that is what breaks it."
+            echo "::error::Or, to paste by hand safely, store it as ONE base64 line:"
+            echo "::error::  base64 -i ~/.ssh/jevmed-deploy | tr -d '\n' | pbcopy"
+            echo "::error::A multi-line private key pasted into a web form loses content."
             echo "--- what the runner actually received ---"
             echo "  bytes:      $(wc -c < ~/.ssh/id_deploy)"
             echo "  lines:      $(wc -l < ~/.ssh/id_deploy)"
