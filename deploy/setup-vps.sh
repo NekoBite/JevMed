@@ -3,9 +3,15 @@
 # One-time bootstrap for the JevMed ERP on the Trilumi Hostinger VPS.
 # Safe to run more than once: every step checks before it acts.
 #
-#   ssh -i ~/.ssh/claude_deploy root@212.85.27.147
-#   git clone git@github.com:NekoBite/jevmed-erp.git /tmp/jevmed-src
-#   sudo bash /tmp/jevmed-src/deploy/setup-vps.sh
+# The repo is private and the VPS holds no GitHub credential, so copy the deploy
+# directory up rather than cloning on the box:
+#
+#   scp -i ~/.ssh/claude_deploy -r deploy root@212.85.27.147:/tmp/jevmed-deploy
+#   ssh -i ~/.ssh/claude_deploy root@212.85.27.147 \
+#     'DEPLOY_USER=jevmed-deploy bash /tmp/jevmed-deploy/setup-vps.sh'
+#
+# DEPLOY_USER matters: without it logname resolves to root over a non-interactive
+# SSH and the sudoers rule lands on the wrong account.
 #
 # ── Read this before running ─────────────────────────────────────────────────
 # This host is AlmaLinux 9 running CyberPanel + OpenLiteSpeed, and lsws owns
@@ -24,7 +30,8 @@
 #   · verifies the host, Node and DNS before changing anything
 #   · creates the jevmed service account and /opt/jevmed
 #   · generates the unlisted key-console path and the encryption key
-#   · asks you for the vault passphrase and stores only its scrypt hash
+#   · stores the scrypt hash of the vault passphrase (asked for only once the
+#     app is deployed and can hash it — a first run leaves a placeholder)
 #   · installs the systemd unit and a narrow sudoers rule for the deploy user
 #   · adds an OpenLiteSpeed proxy vhost in front of the Node process
 #   · obtains the TLS certificate with acme.sh and enables it
@@ -127,31 +134,35 @@ else
   VAULT_PATH="ops-$(openssl rand -hex 24)"
   MASTER_KEY="$(openssl rand -hex 32)"
 
-  echo
-  bold "Choose the passphrase that unlocks the key-management console."
-  bold "It is never stored — only a scrypt hash of it is."
-  while :; do
-    read -rsp "  Passphrase (16+ characters): " PASS1; echo
-    read -rsp "  Repeat: " PASS2; echo
-    [ "$PASS1" = "$PASS2" ] || { warn "They do not match."; continue; }
-    [ "${#PASS1}" -ge 16 ] || { warn "Too short — use at least 16 characters."; continue; }
-    break
-  done
-
-  # Hash it with the application's own function so the format always matches.
+  # Only ask for the passphrase if we can actually do something with it. Hashing
+  # is the ONLY use it has here, and hash-passphrase.js ships with the app — so
+  # on a first run, before any deploy, a typed passphrase would be read and then
+  # silently discarded. Ask for nothing we are going to throw away.
   HASH=""
   if [ -f "$APP_DIR/current/server/hash-passphrase.js" ]; then
+    echo
+    bold "Choose the passphrase that unlocks the key-management console."
+    bold "It is never stored — only a scrypt hash of it is."
+    while :; do
+      read -rsp "  Passphrase (16+ characters): " PASS1; echo
+      read -rsp "  Repeat: " PASS2; echo
+      [ "$PASS1" = "$PASS2" ] || { warn "They do not match."; continue; }
+      [ "${#PASS1}" -ge 16 ] || { warn "Too short — use at least 16 characters."; continue; }
+      break
+    done
     HASH="$(cd "$APP_DIR/current" && /usr/bin/node server/hash-passphrase.js "$PASS1" 2>/dev/null || true)"
+    unset PASS1 PASS2
   fi
+
   if [ -z "$HASH" ]; then
-    warn "The application is not deployed yet, so the passphrase hash cannot be"
-    warn "generated here. Run this on the VPS after the first deploy:"
+    warn "No deployed application yet, so the passphrase cannot be hashed here."
+    warn "Skipping the prompt rather than asking for a secret that gets discarded."
+    warn "After the first deploy, set it with:"
     warn "    cd $APP_DIR/current && node server/hash-passphrase.js 'your passphrase'"
-    warn "then paste the result into VAULT_PASSPHRASE_HASH in $ENV_FILE and"
+    warn "paste the result into VAULT_PASSPHRASE_HASH in $ENV_FILE, then:"
     warn "    systemctl restart jevmed"
     HASH="PASTE_THE_HASH_HERE"
   fi
-  unset PASS1 PASS2
 
   # Written with a restrictive umask so the secrets are never briefly readable.
   ( umask 077; cat > "$ENV_FILE" <<ENVEOF
