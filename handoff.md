@@ -152,16 +152,24 @@ leave it in for CI and container runs.
    ```bash
    # from this Mac, in the repo root
    scp -i ~/.ssh/claude_deploy -r deploy root@212.85.27.147:/tmp/jevmed-deploy
-   ssh -i ~/.ssh/claude_deploy root@212.85.27.147 'bash /tmp/jevmed-deploy/setup-vps.sh'
+   ssh -t -i ~/.ssh/claude_deploy root@212.85.27.147 \
+     'DEPLOY_USER=jevmed-deploy bash /tmp/jevmed-deploy/setup-vps.sh'
    ```
+   `DEPLOY_USER=jevmed-deploy` is **required** — without it the script sees `root` over a
+   non-interactive SSH and grants the sudoers rule to the wrong account. `-t` is for the
+   passphrase prompt.
    It refuses to run on the wrong kind of host, backs up `httpd_config.conf`, and restores it
    automatically if `https://trilumi.xyz/` stops answering. It prints the key-console URL
    **once** — capture it. Recoverable afterwards only by reading `VAULT_PATH` from
    `/opt/jevmed/shared/.env`.
 
-2. **Add five repository secrets** under Settings → Secrets and variables → Actions:
-   `VPS_HOST` (`212.85.27.147`), `VPS_USER`, `VPS_SSH_KEY` (private key), `VPS_SSH_PORT` (`22`),
-   `VPS_APP_DIR` (`/opt/jevmed`).
+2. **Repository secrets.** `VPS_HOST` and `VPS_USER` are set. `VPS_SSH_PORT` and
+   `VPS_APP_DIR` are unset and can stay that way — the workflow defaults them to `22` and
+   `/opt/jevmed`. **`VPS_SSH_KEY` still holds the wrong key** and must be replaced with the
+   dedicated CI key:
+   ```bash
+   gh secret set VPS_SSH_KEY --repo NekoBite/jevmed-erp < ~/.ssh/jevmed_ci
+   ```
 
 3. **Re-run the workflow** once the secrets exist. CI's `verify` job already passes on a
    clean runner (run 35746882630); only `deploy` has never succeeded.
@@ -185,6 +193,10 @@ leave it in for CI and container runs.
   gate first. Awaiting a decision from OH.
 - **Chairman record access.** `src/lib/roles.ts` blocks the Board Chairman from opening an
   identified patient record. Deliberate, and one line to change if the client objects.
+- **Deploy account.** CI deploys as `jevmed-deploy` (uid 5012) on the VPS, not root —
+  the box runs ~24 production sites. Key `~/.ssh/jevmed_ci`, verified to authenticate as
+  that user and be refused as root. Its only privilege is the sudoers rule `setup-vps.sh`
+  installs: restart the `jevmed` unit, read its journal, nothing else.
 - **Repository owner.** Pushed to `NekoBite/jevmed-erp` because that is the authenticated
   account; the first handoff named `oscaro-o/jevmed-erp`. Transfer if the client wants it
   under their own account.

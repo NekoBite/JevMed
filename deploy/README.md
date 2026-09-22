@@ -49,15 +49,28 @@ It must print `212.85.27.147`.
 
 ## 2. Prepare the deploy key
 
-The VPS already authorises `~/.ssh/claude_deploy` for `root`. For CI, prefer a
-separate key so it can be revoked on its own:
+**Done 2026-09-22.** CI deploys as a dedicated unprivileged account, not root —
+this box runs ~24 production sites and a leaked workflow secret must not own it.
+
+- VPS user: **`jevmed-deploy`** (uid 5012, `/home/jevmed-deploy`)
+- Key: `~/.ssh/jevmed_ci` → `VPS_SSH_KEY`
+
+Verified: the key authenticates as `jevmed-deploy` and is **refused** as `root`.
+The only privilege it gains is the narrow sudoers rule §3 installs — restarting
+the `jevmed` unit and reading its journal, nothing else.
+
+To recreate it from scratch:
 
 ```bash
-ssh-keygen -t ed25519 -f ~/.ssh/jevmed_deploy -C "github-actions@jevmed" -N ""
-ssh-copy-id -i ~/.ssh/jevmed_deploy.pub root@212.85.27.147
+ssh-keygen -t ed25519 -f ~/.ssh/jevmed_ci -C "github-actions@jevmed-erp" -N ""
+ssh -i ~/.ssh/claude_deploy root@212.85.27.147 \
+  "useradd -m -s /bin/bash jevmed-deploy; \
+   install -d -o jevmed-deploy -g jevmed-deploy -m 700 /home/jevmed-deploy/.ssh"
+ssh-copy-id -i ~/.ssh/jevmed_ci.pub -o IdentityFile=~/.ssh/claude_deploy jevmed-deploy@212.85.27.147
 ```
 
-`~/.ssh/jevmed_deploy` (the **private** half) becomes the `VPS_SSH_KEY` secret.
+Store the **private** half with `gh secret set VPS_SSH_KEY < ~/.ssh/jevmed_ci` —
+that never prints the key.
 
 > A GitHub *deploy key* grants a machine read access to the repository — useful
 > if you would rather have the VPS pull than have CI push (see §6). The key
@@ -73,8 +86,14 @@ credential it does not need:
 ```bash
 # from your Mac, in the repo root
 scp -i ~/.ssh/claude_deploy -r deploy root@212.85.27.147:/tmp/jevmed-deploy
-ssh -i ~/.ssh/claude_deploy root@212.85.27.147 'bash /tmp/jevmed-deploy/setup-vps.sh'
+ssh -t -i ~/.ssh/claude_deploy root@212.85.27.147 \
+  'DEPLOY_USER=jevmed-deploy bash /tmp/jevmed-deploy/setup-vps.sh'
 ```
+
+**`DEPLOY_USER=jevmed-deploy` is required.** Without it the script falls back to
+`logname`, gets `root` over a non-interactive SSH, and then chowns `/opt/jevmed`
+to root and writes the sudoers rule for root — so the CI user could not deploy.
+`ssh -t` is there because the script prompts for the vault passphrase.
 
 (If you would rather clone on the VPS, add a **read-only** deploy key for it first.)
 
@@ -118,10 +137,10 @@ demonstration mode.
 | Secret | Value |
 |---|---|
 | `VPS_HOST` | `212.85.27.147` |
-| `VPS_USER` | the SSH user from §2 (`root`, unless you made a dedicated one) |
-| `VPS_SSH_KEY` | contents of `~/.ssh/jevmed_deploy` (the private key, including both header lines) |
-| `VPS_SSH_PORT` | `22` |
-| `VPS_APP_DIR` | `/opt/jevmed` |
+| `VPS_USER` | `jevmed-deploy` |
+| `VPS_SSH_KEY` | contents of `~/.ssh/jevmed_ci` — set it with `gh secret set VPS_SSH_KEY < ~/.ssh/jevmed_ci` |
+| `VPS_SSH_PORT` | `22` — *optional*, the workflow defaults to 22 if unset |
+| `VPS_APP_DIR` | `/opt/jevmed` — *optional*, the workflow defaults to this if unset |
 
 The `deploy` job targets a `production` environment, so you can add a required
 reviewer under **Settings → Environments** if you want a human gate before
