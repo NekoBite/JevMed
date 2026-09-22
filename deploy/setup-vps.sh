@@ -349,15 +349,30 @@ echo "  lsws active, $CANARY → HTTP $CANARY_CODE ✓"
 # ─────────────────────────────────────────────────────────────────────────────
 step "Firewall"
 if systemctl is-active --quiet firewalld; then
-  # 80/443 are already open — every other site on this box is reachable. Only
-  # report, so a bootstrap never widens the firewall as a side effect.
-  OPEN="$(firewall-cmd --list-services 2>/dev/null || true)"
-  echo "  firewalld active; services: ${OPEN:-unknown}"
-  case "$OPEN" in
-    *http*) echo "  http/https already permitted ✓" ;;
-    *) warn "http/https not listed. If the site is unreachable from outside, run:" ;
-       warn "    firewall-cmd --permanent --add-service=http --add-service=https && firewall-cmd --reload" ;;
-  esac
+  # Report only — a bootstrap must never widen the firewall as a side effect.
+  #
+  # CyberPanel opens 80/443 with **rich rules**, not with the `services` list,
+  # so checking services alone reports a false problem on exactly the host this
+  # script targets — and tempts the operator into an --add-service they do not
+  # need. Check all three places a port can legitimately be opened.
+  OPEN_OK=1
+  for prt in 80 443; do
+    if   firewall-cmd --list-services   2>/dev/null | grep -qw -e http -e https \
+      || firewall-cmd --list-ports      2>/dev/null | grep -qw "$prt/tcp" \
+      || firewall-cmd --list-rich-rules 2>/dev/null | grep -q "port=\"$prt\""; then
+      continue
+    fi
+    OPEN_OK=0
+    warn "port $prt/tcp is not permitted in any service, port or rich rule."
+  done
+  if [ "$OPEN_OK" = "1" ]; then
+    echo "  firewalld active; 80/tcp and 443/tcp already permitted ✓"
+  else
+    warn "If the site is unreachable from outside, open them — but check with the"
+    warn "host's panel first, since it may manage these rules itself:"
+    warn "    firewall-cmd --permanent --add-service=http --add-service=https"
+    warn "    firewall-cmd --reload"
+  fi
 else
   echo "  firewalld inactive — nothing to do"
 fi

@@ -33,6 +33,7 @@ Fixed requirements from the client:
 
 - Clean working tree on `main`, pushed to `github.com/NekoBite/jevmed-erp` (private)
 - DNS live: `jevmed.trilumi.xyz` → `212.85.27.147`, verified authoritatively
+- VPS bootstrapped; HTTPS live with a valid cert. Serving 503 until the first deploy lands
 - `npm ci`, `npm run build`, `npm start` and the smoke test all confirmed **on this Mac**
 - Smoke test passes: 64 checks — 5 roles × 8 pages × 3 languages, headless Chromium
 - Assistant has only ever run in **demonstration mode** — no API key has been stored anywhere
@@ -49,7 +50,7 @@ No database — the dataset ships in the bundle, and the only durable server sta
 | Assistant + streaming proxy | Done, untested against a live provider key |
 | Encrypted key vault + console | Done |
 | CI pipeline | `verify` green on a clean runner; `deploy` never succeeded (no secrets yet) |
-| VPS bootstrap, systemd, OpenLiteSpeed vhost | Rewritten for the real host; dry-run verified, not yet run on the VPS |
+| VPS bootstrap, systemd, OpenLiteSpeed vhost | **Run successfully 2026-09-22**; TLS live, idempotent on re-run |
 
 ---
 
@@ -147,23 +148,18 @@ leave it in for CI and container runs.
    from 8.8.8.8 / 1.1.1.1 / 9.9.9.9. No AAAA and no CNAME, which matters — Let's Encrypt
    prefers IPv6 and would fail the challenge against a stale AAAA.
 
-1. **Bootstrap the VPS.** The repo is private and the VPS holds no GitHub credential, so
-   copy the deploy files up rather than cloning — that keeps the box credential-free:
-   ```bash
-   # from this Mac, in the repo root
-   scp -i ~/.ssh/claude_deploy -r deploy root@212.85.27.147:/tmp/jevmed-deploy
-   ssh -t -i ~/.ssh/claude_deploy root@212.85.27.147 \
-     'DEPLOY_USER=jevmed-deploy bash /tmp/jevmed-deploy/setup-vps.sh'
-   ```
-   `DEPLOY_USER=jevmed-deploy` is **required** — without it the script sees `root` over a
-   non-interactive SSH and grants the sudoers rule to the wrong account. `-t` is for the
-   passphrase prompt.
-   It refuses to run on the wrong kind of host, backs up `httpd_config.conf`, and restores it
-   automatically if `https://trilumi.xyz/` stops answering. It prints the key-console URL
-   **once** — capture it. Recoverable afterwards only by reading `VAULT_PATH` from
-   `/opt/jevmed/shared/.env`.
+~~1. **Bootstrap the VPS.**~~ **Done 2026-09-22.** Ran with `DEPLOY_USER=jevmed-deploy`.
+   Created `/opt/jevmed`, the `jevmed` service account, the systemd unit, the sudoers rule,
+   the OpenLiteSpeed vhost (+ `virtualHost` block and a `map` in all three listeners), and a
+   Let's Encrypt cert valid to **2026-12-21**. Canary held throughout: `https://trilumi.xyz/`
+   → 200 before and after. Verified from outside: `https://jevmed.trilumi.xyz/` → **503**
+   (correct — lsws proxy is up, no backend deployed yet), TLS verifies, CN matches; all four
+   neighbour sites still 200. Re-ran it to confirm idempotency: no further config change.
 
-2. **Repository secrets.** `VPS_HOST` and `VPS_USER` are set. `VPS_SSH_PORT` and
+   The **key-console URL** is in `VAULT_PATH` in `/opt/jevmed/shared/.env` — read it there.
+   It is deliberately not recorded in this repo.
+
+1. **Repository secrets.** `VPS_HOST` and `VPS_USER` are set. `VPS_SSH_PORT` and
    `VPS_APP_DIR` are unset and can stay that way — the workflow defaults them to `22` and
    `/opt/jevmed`. **`VPS_SSH_KEY` still holds the wrong key** and must be replaced with the
    dedicated CI key:
@@ -171,10 +167,10 @@ leave it in for CI and container runs.
    gh secret set VPS_SSH_KEY --repo NekoBite/jevmed-erp < ~/.ssh/jevmed_ci
    ```
 
-3. **Re-run the workflow** once the secrets exist. CI's `verify` job already passes on a
+2. **Re-run the workflow** once the secrets exist. CI's `verify` job already passes on a
    clean runner (run 35746882630); only `deploy` has never succeeded.
 
-4. **Finish the passphrase hash.** On a first run `setup-vps.sh` cannot hash the passphrase
+3. **Finish the passphrase hash.** On a first run `setup-vps.sh` cannot hash the passphrase
    (the app is not deployed yet) and leaves a placeholder. After the first successful deploy:
    ```bash
    cd /opt/jevmed/current
@@ -183,7 +179,7 @@ leave it in for CI and container runs.
    ```
    Until this is done the console is disabled and the assistant stays in demonstration mode.
 
-5. **Store an API key** in the console and exercise the live provider path — this is the one
+4. **Store an API key** in the console and exercise the live provider path — this is the one
    code path never run end to end.
 
 ### Open decisions
