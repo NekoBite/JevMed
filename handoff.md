@@ -31,7 +31,7 @@ Fixed requirements from the client:
 
 **Built and verified locally. Nothing deployed yet.**
 
-- Clean working tree on `main`, pushed to `github.com/NekoBite/jevmed-erp` (private)
+- Clean working tree on `main`, pushed to `github.com/NekoBite/JevMed` (private)
 - DNS live: `jevmed.trilumi.xyz` → `212.85.27.147`, verified authoritatively
 - VPS bootstrapped; HTTPS live with a valid cert. Serving 503 until the first deploy lands
 - `npm ci`, `npm run build`, `npm start` and the smoke test all confirmed **on this Mac**
@@ -164,7 +164,7 @@ leave it in for CI and container runs.
    `/opt/jevmed`. **`VPS_SSH_KEY` still holds the wrong key** and must be replaced with the
    dedicated CI key:
    ```bash
-   gh secret set VPS_SSH_KEY --repo NekoBite/jevmed-erp < ~/.ssh/jevmed-deploy
+   gh secret set VPS_SSH_KEY --repo NekoBite/JevMed < ~/.ssh/jevmed-deploy
    ```
 
 2. **Re-run the workflow** once the secrets exist. CI's `verify` job already passes on a
@@ -193,9 +193,10 @@ leave it in for CI and container runs.
   the box runs ~24 production sites. Key `~/.ssh/jevmed-deploy`, verified to authenticate as
   that user and be refused as root. Its only privilege is the sudoers rule `setup-vps.sh`
   installs: restart the `jevmed` unit, read its journal, nothing else.
-- **Repository owner.** Pushed to `NekoBite/jevmed-erp` because that is the authenticated
+- **Repository owner.** Pushed to `NekoBite/JevMed` because that is the authenticated
   account; the first handoff named `oscaro-o/jevmed-erp`. Transfer if the client wants it
-  under their own account.
+  under their own account. An earlier `NekoBite/jevmed-erp` was deleted — if you find a
+  stale reference to it anywhere, this is the repo it means.
 
 ### Known limits
 
