@@ -102,10 +102,43 @@ jobs:
           HOST: ${{ secrets.VPS_HOST }}
           PORT: ${{ secrets.VPS_SSH_PORT }}
         run: |
+          set -euo pipefail
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
-          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_deploy
+
+          # tr -d '\r' defends against the most common way this secret arrives
+          # broken: pasted through a web form or a Windows clipboard, which turns
+          # the line endings into CRLF. OpenSSH then cannot parse the base64 body
+          # and reports only "error in libcrypto", which reads like a rejected
+          # key rather than an unreadable one.
+          printf '%s\n' "$SSH_KEY" | tr -d '\r' > ~/.ssh/id_deploy
           chmod 600 ~/.ssh/id_deploy
-          ssh-keyscan -p "${PORT:-22}" -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+          # Validate before use, so a malformed secret fails HERE with a message
+          # that says what to do, instead of 40 lines later as a generic
+          # "Permission denied (publickey)" that looks like an authorisation
+          # problem. A fingerprint is public information and safe to print; it
+          # also confirms WHICH key the secret holds.
+          if ! ssh-keygen -y -f ~/.ssh/id_deploy > /dev/null 2>&1; then
+            echo "::error::VPS_SSH_KEY is not a readable private key. Its bytes are"
+            echo "::error::mangled — this is not an authorisation failure. Re-set it"
+            echo "::error::straight from the file, which preserves it exactly:"
+            echo "::error::  gh secret set VPS_SSH_KEY --repo <owner>/<repo> < ~/.ssh/jevmed-deploy"
+            echo "::error::Do not paste a private key into the web UI; that is what breaks it."
+            echo "--- what the runner actually received ---"
+            echo "  bytes:      $(wc -c < ~/.ssh/id_deploy)"
+            echo "  lines:      $(wc -l < ~/.ssh/id_deploy)"
+            echo "  first line: $(head -1 ~/.ssh/id_deploy)"
+            echo "  last line:  $(tail -1 ~/.ssh/id_deploy)"
+            echo "  carriage returns present: $(grep -c $'\r' ~/.ssh/id_deploy || true)"
+            exit 1
+          fi
+          echo "deploy key loaded OK — fingerprint $(ssh-keygen -lf ~/.ssh/id_deploy | awk '{print $2}')"
+
+          if ! ssh-keyscan -T 10 -p "${PORT:-22}" -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null; then
+            echo "::error::Could not reach the VPS on port ${PORT:-22} to read its host key."
+            echo "::error::Check VPS_HOST — it must be a bare host or IP, with no scheme or port."
+            exit 1
+          fi
 
       - name: Ship it
         env:
