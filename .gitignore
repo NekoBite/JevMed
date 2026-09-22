@@ -1,0 +1,12 @@
+node_modules/
+dist/
+data/*.enc
+data/*.json
+!data/.gitkeep
+.env
+.env.local
+*.log
+.DS_Store
+screenshots/
+release/
+release.tar.gz

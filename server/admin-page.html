@@ -1,0 +1,263 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow, noarchive">
+<meta name="referrer" content="no-referrer">
+<title>Key Management</title>
+<style>
+  :root {
+    --ink:#0F1E2E; --soft:#3A4C5E; --faint:#5C6F81;
+    --primary:#14456E; --primary-dark:#0E3354; --light:#E7EEF5;
+    --line:#C4D0DB; --strong:#93A5B5; --canvas:#F3F6F9;
+    --ok:#14573C; --okbg:#E4F1EA; --warn:#7A4E00; --warnbg:#FCF0DC;
+    --danger:#8E1B1B; --dangerbg:#FBE7E7;
+  }
+  * { box-sizing:border-box; }
+  body {
+    margin:0; background:var(--canvas); color:var(--ink); font-size:17px; line-height:1.7;
+    font-family: system-ui,-apple-system,"Segoe UI",Roboto,"Noto Sans TC","Noto Sans SC",sans-serif;
+  }
+  header { background:var(--primary); color:#fff; padding:20px 0; }
+  .wrap { max-width:760px; margin:0 auto; padding:0 20px; }
+  h1 { font-family:Georgia,serif; font-size:1.5rem; margin:0; }
+  header p { margin:4px 0 0; opacity:.85; font-size:.9rem; }
+  main { padding:32px 0 64px; }
+  .card { background:#fff; border:1px solid var(--line); border-radius:8px; padding:24px; margin-bottom:24px;
+          box-shadow:0 1px 2px rgba(15,30,46,.06),0 2px 8px rgba(15,30,46,.06); }
+  h2 { font-family:Georgia,serif; font-size:1.25rem; margin:0 0 16px; }
+  label { display:block; font-weight:600; font-size:.9rem; color:var(--soft); margin-bottom:8px; }
+  input, select {
+    width:100%; min-height:48px; padding:10px 14px; font-size:1rem; font-family:inherit;
+    border:1px solid var(--strong); border-radius:4px; background:#fff; color:var(--ink);
+  }
+  input:focus, select:focus, button:focus-visible { outline:3px solid #2E6EA6; outline-offset:2px; }
+  .field { margin-bottom:20px; }
+  button {
+    min-height:48px; padding:0 22px; font-size:1rem; font-weight:600; font-family:inherit;
+    border-radius:4px; border:1px solid var(--primary); background:var(--primary); color:#fff; cursor:pointer;
+  }
+  button:hover { background:var(--primary-dark); }
+  button[disabled] { opacity:.5; cursor:not-allowed; }
+  button.secondary { background:#fff; color:var(--primary); border-color:var(--strong); }
+  button.secondary:hover { background:var(--light); }
+  button.danger { background:#fff; color:var(--danger); border-color:var(--danger); }
+  button.danger:hover { background:var(--dangerbg); }
+  .row { display:flex; gap:12px; flex-wrap:wrap; }
+  .msg { padding:14px 18px; border-radius:4px; border-left:8px solid; margin-bottom:20px; font-size:.95rem; }
+  .msg.ok { background:var(--okbg); border-color:var(--ok); color:var(--ok); }
+  .msg.err { background:var(--dangerbg); border-color:var(--danger); color:var(--danger); }
+  .msg.warn { background:var(--warnbg); border-color:var(--warn); color:var(--warn); }
+  .msg.info { background:var(--light); border-color:var(--primary); color:var(--primary-dark); }
+  dl { margin:0; display:grid; grid-template-columns:auto 1fr; gap:10px 24px; }
+  dt { font-weight:600; color:var(--soft); font-size:.9rem; }
+  dd { margin:0; font-variant-numeric:tabular-nums; }
+  code { font-family:ui-monospace,Menlo,Consolas,monospace; background:var(--canvas); padding:2px 6px; border-radius:3px; }
+  .hint { font-size:.875rem; color:var(--faint); margin-top:6px; }
+  .hidden { display:none; }
+  footer { border-top:1px solid var(--line); background:#fff; padding:18px 0; font-size:.85rem; color:var(--faint); }
+</style>
+</head>
+<body>
+<header><div class="wrap">
+  <h1>JevMed · Key Management</h1>
+  <p>Assistant credentials for <strong id="host">this deployment</strong></p>
+</div></header>
+
+<main class="wrap">
+  <div id="flash"></div>
+
+  <!-- ── Sign in ───────────────────────────────────────────────────────── -->
+  <section class="card" id="loginCard">
+    <h2>Sign in</h2>
+    <form id="loginForm" autocomplete="off">
+      <div class="field">
+        <label for="passphrase">Vault passphrase</label>
+        <input type="password" id="passphrase" name="passphrase" autocomplete="current-password" required minlength="8">
+        <p class="hint">Five failed attempts locks this address out for fifteen minutes.</p>
+      </div>
+      <button type="submit" id="loginBtn">Unlock</button>
+    </form>
+  </section>
+
+  <!-- ── Console ───────────────────────────────────────────────────────── -->
+  <div id="console" class="hidden">
+    <section class="card">
+      <h2>Current configuration</h2>
+      <dl id="state"></dl>
+      <div class="row" style="margin-top:20px">
+        <button type="button" class="secondary" id="refreshBtn">Refresh</button>
+        <button type="button" class="danger" id="clearBtn">Remove stored key</button>
+        <button type="button" class="secondary" id="logoutBtn">Sign out</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Set or replace the key</h2>
+      <form id="keyForm" autocomplete="off">
+        <div class="field">
+          <label for="provider">Provider</label>
+          <select id="provider" name="provider">
+            <option value="anthropic">Anthropic (Claude)</option>
+            <option value="openai">OpenAI</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="apiKey">API key</label>
+          <input type="password" id="apiKey" name="apiKey" autocomplete="off" spellcheck="false" required minlength="20">
+          <p class="hint">Stored encrypted with AES-256-GCM. It is never sent back to a browser — only the last four characters are ever shown.</p>
+        </div>
+        <div class="row">
+          <button type="button" class="secondary" id="testBtn">Test key &amp; list models</button>
+        </div>
+        <div class="field hidden" id="modelField" style="margin-top:20px">
+          <label for="model">Model</label>
+          <select id="model" name="model"></select>
+        </div>
+        <button type="submit" id="saveBtn" disabled>Save</button>
+      </form>
+    </section>
+  </div>
+</main>
+
+<footer class="wrap">
+  This console is reachable only at its unlisted path and is excluded from search indexing.
+</footer>
+
+<script>
+(function () {
+  'use strict'
+  var BASE = window.location.pathname.replace(/\/+$/, '')
+  var el = function (id) { return document.getElementById(id) }
+  var models = []
+
+  try { el('host').textContent = window.location.host } catch (e) {}
+
+  function flash(kind, text) {
+    el('flash').innerHTML = ''
+    if (!text) return
+    var d = document.createElement('div')
+    d.className = 'msg ' + kind
+    d.setAttribute('role', kind === 'err' ? 'alert' : 'status')
+    d.textContent = text
+    el('flash').appendChild(d)
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+  }
+
+  function api(path, opts) {
+    opts = opts || {}
+    return fetch(BASE + path, {
+      method: opts.method || 'GET',
+      headers: { 'content-type': 'application/json' },
+      credentials: 'same-origin',
+      body: opts.body ? JSON.stringify(opts.body) : undefined
+    }).then(function (r) {
+      return r.json().catch(function () { return {} }).then(function (j) {
+        return { status: r.status, body: j }
+      })
+    })
+  }
+
+  function renderState(s) {
+    var rows = []
+    if (s.blocked) {
+      rows.push(['Status', 'Blocked — ' + (s.reason || 'server not configured')])
+    } else if (!s.configured) {
+      rows.push(['Status', 'No key stored — the assistant runs in demonstration mode'])
+    } else {
+      rows.push(['Status', 'Configured'])
+      rows.push(['Provider', s.provider])
+      rows.push(['Model', s.model])
+      rows.push(['Key', '••••••••' + (s.keyLast4 || '')])
+      rows.push(['Last updated', new Date(s.updatedAt).toLocaleString()])
+    }
+    el('state').innerHTML = rows.map(function (r) {
+      var dt = document.createElement('dt'); dt.textContent = r[0]
+      var dd = document.createElement('dd'); dd.textContent = r[1]
+      return dt.outerHTML + dd.outerHTML
+    }).join('')
+  }
+
+  function showConsole() {
+    el('loginCard').classList.add('hidden')
+    el('console').classList.remove('hidden')
+    loadState()
+  }
+
+  function loadState() {
+    api('/api/state').then(function (r) {
+      if (r.status === 401) { el('console').classList.add('hidden'); el('loginCard').classList.remove('hidden'); return }
+      renderState(r.body)
+    })
+  }
+
+  el('loginForm').addEventListener('submit', function (e) {
+    e.preventDefault()
+    el('loginBtn').disabled = true
+    api('/api/login', { method: 'POST', body: { passphrase: el('passphrase').value } }).then(function (r) {
+      el('loginBtn').disabled = false
+      el('passphrase').value = ''
+      if (r.status === 200) { flash('', ''); showConsole() }
+      else if (r.status === 429) flash('err', 'Too many attempts. Try again later.')
+      else flash('err', r.body.error || 'Incorrect passphrase.')
+    })
+  })
+
+  el('testBtn').addEventListener('click', function () {
+    var key = el('apiKey').value.trim()
+    if (key.length < 20) { flash('err', 'Enter the full API key first.'); return }
+    el('testBtn').disabled = true
+    flash('info', 'Contacting the provider…')
+    api('/api/test', { method: 'POST', body: { provider: el('provider').value, apiKey: key } }).then(function (r) {
+      el('testBtn').disabled = false
+      if (r.status !== 200) { flash('err', r.body.error || 'The provider rejected that key.'); return }
+      models = r.body.models || []
+      if (!models.length) { flash('warn', 'Key accepted, but no chat-capable models were returned.'); return }
+      var sel = el('model')
+      sel.innerHTML = ''
+      models.forEach(function (m) {
+        var o = document.createElement('option'); o.value = m.id; o.textContent = m.label
+        sel.appendChild(o)
+      })
+      el('modelField').classList.remove('hidden')
+      el('saveBtn').disabled = false
+      flash('ok', 'Key accepted. ' + models.length + ' model(s) available — choose one and save.')
+    })
+  })
+
+  el('keyForm').addEventListener('submit', function (e) {
+    e.preventDefault()
+    el('saveBtn').disabled = true
+    api('/api/key', {
+      method: 'POST',
+      body: { provider: el('provider').value, apiKey: el('apiKey').value.trim(), model: el('model').value }
+    }).then(function (r) {
+      el('saveBtn').disabled = false
+      if (r.status !== 200) { flash('err', r.body.error || 'Could not save.'); return }
+      el('apiKey').value = ''
+      el('modelField').classList.add('hidden')
+      el('saveBtn').disabled = true
+      flash('ok', 'Saved. The assistant is now live.')
+      loadState()
+    })
+  })
+
+  el('clearBtn').addEventListener('click', function () {
+    api('/api/key', { method: 'DELETE' }).then(function () {
+      flash('warn', 'Stored key removed. The assistant is back in demonstration mode.')
+      loadState()
+    })
+  })
+
+  el('refreshBtn').addEventListener('click', loadState)
+  el('logoutBtn').addEventListener('click', function () {
+    api('/api/logout', { method: 'POST' }).then(function () { window.location.reload() })
+  })
+
+  // If a valid session cookie is already present, skip the sign-in card.
+  api('/api/state').then(function (r) { if (r.status === 200) showConsole() })
+})()
+</script>
+</body>
+</html>

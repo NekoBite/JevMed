@@ -1,0 +1,172 @@
+name: Build, verify and deploy
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Type-check, build and smoke-test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Regenerate mock data and confirm it is unchanged
+        # The dataset is committed so that reviewers can read it, and generated
+        # so that it stays internally consistent. If those two disagree, the
+        # commit is stale — fail here rather than shipping contradictory records.
+        run: |
+          npm run seed
+          git diff --exit-code -- src/data/mock.json
+
+      - name: Type-check and build
+        run: npm run build
+
+      - name: Install Chromium for the smoke test
+        run: npx playwright install --with-deps chromium
+
+      - name: Start the server
+        env:
+          PORT: 8787
+          VAULT_PATH: ops-ci0000000000000000000000
+          # Throwaway key for the CI run only; nothing it encrypts outlives the job.
+          VAULT_MASTER_KEY: 00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff
+          DATA_DIR: ./data
+        run: |
+          export VAULT_PASSPHRASE_HASH="$(node server/hash-passphrase.js 'continuous integration passphrase')"
+          node server/index.js &
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:8787/api/health && break
+            sleep 1
+          done
+
+      - name: Smoke-test every role, page and language
+        env:
+          VAULT_PATH: ops-ci0000000000000000000000
+        run: npm run smoke
+
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenshots
+          path: screenshots/
+          retention-days: 14
+          if-no-files-found: ignore
+
+      - name: Package the release
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        run: |
+          mkdir -p release
+          cp -r dist server package.json package-lock.json release/
+          tar -czf release.tar.gz -C release .
+
+      - name: Upload the release
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: release
+          path: release.tar.gz
+          retention-days: 7
+
+  deploy:
+    name: Deploy to the Hostinger VPS
+    needs: verify
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Download the release
+        uses: actions/download-artifact@v4
+        with:
+          name: release
+
+      - name: Authorise the deploy key
+        env:
+          SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          HOST: ${{ secrets.VPS_HOST }}
+          PORT: ${{ secrets.VPS_SSH_PORT }}
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          ssh-keyscan -p "${PORT:-22}" -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Ship it
+        env:
+          HOST: ${{ secrets.VPS_HOST }}
+          USER: ${{ secrets.VPS_USER }}
+          PORT: ${{ secrets.VPS_SSH_PORT }}
+          APP_DIR: ${{ secrets.VPS_APP_DIR }}
+        run: |
+          set -euo pipefail
+          APP_DIR="${APP_DIR:-/opt/jevmed}"
+          PORT="${PORT:-22}"
+          STAMP="$(date -u +%Y%m%d%H%M%S)"
+
+          # Upload into a fresh directory, then swap the symlink. A deploy that
+          # fails halfway must never leave a half-written app being served.
+          scp -P "$PORT" -i ~/.ssh/id_deploy release.tar.gz "$USER@$HOST:/tmp/jevmed-$STAMP.tar.gz"
+
+          ssh -p "$PORT" -i ~/.ssh/id_deploy "$USER@$HOST" bash -seu <<REMOTE
+            APP_DIR="$APP_DIR"
+            STAMP="$STAMP"
+            REL="\$APP_DIR/releases/\$STAMP"
+
+            # The deploy user owns APP_DIR outright, so nothing here needs root.
+            # The single privileged action is restarting the unit, granted by a
+            # narrow sudoers rule that setup-vps.sh installs.
+            mkdir -p "\$REL"
+            tar -xzf "/tmp/jevmed-\$STAMP.tar.gz" -C "\$REL"
+            rm -f "/tmp/jevmed-\$STAMP.tar.gz"
+
+            cd "\$REL"
+            npm ci --omit=dev --no-audit --no-fund
+
+            # .env and the encrypted vault live outside the release directory and
+            # survive every deploy.
+            ln -sfn "\$APP_DIR/shared/.env" "\$REL/.env"
+            ln -sfn "\$APP_DIR/shared/data" "\$REL/data"
+
+            ln -sfn "\$REL" "\$APP_DIR/current"
+            sudo -n systemctl restart jevmed
+
+            # Prove it came back before declaring success.
+            OK=0
+            for i in \$(seq 1 30); do
+              if curl -sf http://127.0.0.1:8787/api/health > /dev/null; then OK=1; break; fi
+              sleep 1
+            done
+
+            if [ "\$OK" != "1" ]; then
+              echo "health check FAILED after deploy — rolling back" >&2
+              sudo -n journalctl -u jevmed -n 60 --no-pager >&2 || true
+              PREV=\$(ls -1dt "\$APP_DIR"/releases/*/ | sed -n 2p)
+              if [ -n "\$PREV" ]; then
+                ln -sfn "\${PREV%/}" "\$APP_DIR/current"
+                sudo -n systemctl restart jevmed
+                echo "rolled back to \$PREV" >&2
+              fi
+              exit 1
+            fi
+
+            echo "deployed \$STAMP and health check passed"
+
+            # Keep the last five releases so a manual rollback is one symlink away.
+            ls -1dt "\$APP_DIR"/releases/*/ | tail -n +6 | xargs -r rm -rf
+          REMOTE

@@ -1,0 +1,62 @@
+# /etc/systemd/system/jevmed.service
+#
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now jevmed
+#   sudo journalctl -u jevmed -f
+
+[Unit]
+Description=JevMed ERP
+Documentation=https://jevmed.trilumi.xyz
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=jevmed
+Group=jevmed
+WorkingDirectory=/opt/jevmed/current
+EnvironmentFile=/opt/jevmed/shared/.env
+ExecStart=/usr/bin/node /opt/jevmed/current/server/index.js
+Restart=always
+RestartSec=3
+# A crash loop should stop rather than hammer the box forever.
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=jevmed
+
+# ── Hardening ───────────────────────────────────────────────────────────────
+# This process holds a provider API key. It should be able to read its own
+# release directory, write its own data directory, and do nothing else.
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=false
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+UMask=0077
+
+# Only the vault directory is writable.
+ReadWritePaths=/opt/jevmed/shared/data
+
+LimitNOFILE=8192
+
+[Install]
+WantedBy=multi-user.target
