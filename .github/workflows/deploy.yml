@@ -105,25 +105,40 @@ jobs:
           set -euo pipefail
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
 
-          # VPS_SSH_KEY is accepted in EITHER form:
+          # VPS_SSH_KEY is accepted in any of these forms, because every one of
+          # them has turned up in practice:
           #
-          #   1. the PEM key itself, as it appears in the file; or
-          #   2. that same file base64-encoded onto ONE line.
+          #   1. the PEM key exactly as it appears in the file;
+          #   2. that whole file base64-encoded onto one line;
+          #   3. just the BODY — the base64 between the markers — with the
+          #      -----BEGIN-----/-----END----- lines omitted.
           #
-          # Form 2 exists because a multi-line private key pasted into a web form
-          # loses content — observed repeatedly here, arriving as 349 bytes / 5
-          # lines instead of 419 / 7, with the line breaks intact but whole lines
-          # gone. A single-line blob has no line structure to lose. Produce it
-          # with:  base64 -i ~/.ssh/jevmed-deploy | tr -d '\n'
-          #
-          # tr -d '\r' still guards form 1 against CRLF from a Windows clipboard.
-          if printf '%s' "$SSH_KEY" | grep -q -- '-----BEGIN'; then
-            printf '%s\n' "$SSH_KEY" | tr -d '\r' > ~/.ssh/id_deploy
-            echo "VPS_SSH_KEY supplied as a PEM key"
+          # Form 3 is the easy mistake: selecting the key's visible text in an
+          # editor and missing the first and last lines. It arrives as exactly
+          # 70 bytes and 2 lines short (36 for the BEGIN line, 34 for END), and
+          # OpenSSH then reports only "error in libcrypto", which looks like a
+          # rejected key rather than an incomplete one. Rebuild it instead of
+          # making someone paste again.
+          RAW="$(printf '%s' "$SSH_KEY" | tr -d '\r')"
+
+          if printf '%s' "$RAW" | grep -q -- '-----BEGIN'; then
+            printf '%s\n' "$RAW" > ~/.ssh/id_deploy
+            echo "VPS_SSH_KEY: PEM key, used as-is"
+          elif printf '%s' "$RAW" | tr -d '[:space:]' | base64 -d 2>/dev/null | grep -qa -- '-----BEGIN'; then
+            printf '%s' "$RAW" | tr -d '[:space:]' | base64 -d > ~/.ssh/id_deploy
+            echo "VPS_SSH_KEY: base64-encoded PEM, decoded"
           else
-            printf '%s' "$SSH_KEY" | tr -d '[:space:]' | base64 -d > ~/.ssh/id_deploy 2>/dev/null || true
-            echo "VPS_SSH_KEY supplied base64-encoded; decoded it"
+            # Treat it as a bare body and rewrap. fold restores the 70-column
+            # lines OpenSSH expects; the markers go back on.
+            {
+              echo "-----BEGIN OPENSSH PRIVATE KEY-----"
+              printf '%s' "$RAW" | tr -d '[:space:]' | fold -w 70
+              echo
+              echo "-----END OPENSSH PRIVATE KEY-----"
+            } > ~/.ssh/id_deploy
+            echo "VPS_SSH_KEY: bare key body — rebuilt the PEM wrapper around it"
           fi
+
           chmod 600 ~/.ssh/id_deploy
 
           # Validate before use, so a malformed secret fails HERE with a message
