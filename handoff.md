@@ -3,7 +3,7 @@
 **Project:** JevMed ERP — medical record & operations system with an embedded AI clinical assistant
 **Repo root:** `~/Documents/Claude/Projects/Med` (this folder *is* the git working tree)
 **Target:** https://jevmed.trilumi.xyz — Hostinger VPS, deployed from GitHub Actions
-**Last updated:** 2026-09-22
+**Last updated:** 2026-09-22 (second session)
 
 Companion docs: `README.md` (overview + local run), `deploy/README.md` (full deployment runbook).
 A human-facing version of this handoff also exists as a Claude doc titled *JevMed ERP — Handoff & Deployment*.
@@ -31,13 +31,14 @@ Fixed requirements from the client:
 
 **Built and verified locally. Nothing deployed yet.**
 
-- 58 files, one commit on `main`, clean working tree, no git remote
-- `npm install`, `npm run build` and `npm start` all confirmed working on this Mac
-- Smoke test passes: 5 roles × 8 pages × 3 languages, headless Chromium
+- Clean working tree on `main`, pushed to `github.com/NekoBite/jevmed-erp` (private)
+- `npm ci`, `npm run build`, `npm start` and the smoke test all confirmed **on this Mac**
+- Smoke test passes: 64 checks — 5 roles × 8 pages × 3 languages, headless Chromium
 - Assistant has only ever run in **demonstration mode** — no API key has been stored anywhere
 
-Stack: React 19 + TypeScript + Vite + Tailwind; Express on Node 22 behind nginx. No database —
-the dataset ships in the bundle, and the only durable server state is `data/vault.enc`.
+Stack: React 19 + TypeScript + Vite + Tailwind; Express on Node 22 behind **OpenLiteSpeed**.
+No database — the dataset ships in the bundle, and the only durable server state is
+`data/vault.enc`.
 
 | Area | State |
 |---|---|
@@ -47,7 +48,7 @@ the dataset ships in the bundle, and the only durable server state is `data/vaul
 | Assistant + streaming proxy | Done, untested against a live provider key |
 | Encrypted key vault + console | Done |
 | CI pipeline | Written, never run |
-| VPS bootstrap, systemd, nginx | Written, never run |
+| VPS bootstrap, systemd, OpenLiteSpeed vhost | Rewritten for the real host; dry-run verified, not yet run on the VPS |
 
 ---
 
@@ -109,43 +110,65 @@ Any field shown twice must be derived once.
 (หนังสือส่งมอบงาน) with Buddhist-era dates and signature blocks — correct for Tokenine's Thai
 public-sector work, wrong for a Hong Kong engineering handoff.
 
-**Playwright's own pinned Chromium.** `npm i playwright` expects build 1243; this environment has
-1194 at `/opt/pw-browsers/chromium-1194/chrome-linux/chrome`. The smoke test now falls back to that
-path rather than downloading a second browser.
+**Assuming the deploy target without looking at it.** The entire first-pass deploy layer —
+`setup-vps.sh`, an nginx vhost, `certbot --nginx`, `ufw` — was written for Ubuntu + nginx.
+The actual host, `212.85.27.147`, is **AlmaLinux 9 running CyberPanel + OpenLiteSpeed**, and
+`lsws` owns `:80` and `:443` for `trilumi.xyz` and ~24 sibling sites. The script would have
+died on `apt-get` before touching anything, so nothing was damaged — but the plan was wrong
+end to end. Replaced with a dnf/OpenLiteSpeed/acme.sh version. **Probe the host before
+writing anything that configures it.**
+
+**Trusting "confirmed working on this Mac".** It was not. `node_modules` held
+**linux-arm64** binaries from the container the previous session actually ran in, so
+`npm run build` failed on a missing `@rollup/rollup-darwin-arm64`. A clean `npm ci` fixed it.
+Re-verify a handoff's green ticks on the machine you are on.
+
+**`StartLimitIntervalSec` / `StartLimitBurst` under `[Service]`.** They are `[Unit]`
+directives; systemd logs "Unknown key name" and ignores them, so the crash-loop guard the
+comment promised did nothing. Moved to `[Unit]`.
+
+**A trailing wildcard in the sudoers rule.** `journalctl -u jevmed *` lets the deploy user
+pass arbitrary flags to journalctl as root, and journalctl's pager escapes to a root shell —
+a full privilege escalation for any non-root deploy user. Now pinned to exact argument lists.
+
+**Playwright's own pinned Chromium.** In the Linux container the first session ran in, `playwright`
+expected build 1243 while only 1194 was present at `/opt/pw-browsers/chromium-1194/chrome-linux/chrome`.
+The smoke test falls back to that path when it exists rather than downloading a second browser. On
+this Mac the path is absent and Playwright's own Chromium 1243 is used, so the fallback is inert —
+leave it in for CI and container runs.
 
 ---
 
 ## Next Steps
 
-In order. The first three are blocking; nothing can be deployed until they are done.
+Step 1 is blocking and is the only one that cannot be done from this machine.
 
-1. **Create the GitHub repo and push.**
+1. **Add the DNS A record — owner action, in Hostinger hPanel.**
+   Domains → DNS for `trilumi.xyz`: type `A`, name `jevmed`, value `212.85.27.147`, TTL 300.
+   `trilumi.xyz` is on `ns1/ns2.dns-parking.com`, so the zone lives in hPanel and **cannot be
+   edited over SSH**. Verify before step 2, or the ACME challenge fails:
    ```bash
-   cd ~/Documents/Claude/Projects/Med
-   git remote add origin git@github.com:oscaro-o/jevmed-erp.git
-   git push -u origin main
+   dig +short jevmed.trilumi.xyz    # must print 212.85.27.147
    ```
 
-2. **Add the DNS A record.** In Hostinger hPanel → Domains → DNS for `trilumi.xyz`:
-   type `A`, name `jevmed`, pointing at the VPS IPv4, TTL 300. `trilumi.xyz` uses
-   `ns1/ns2.dns-parking.com`, so DNS lives in hPanel, not at an external registrar.
-   Verify with `dig +short jevmed.trilumi.xyz` before step 3 — certbot fails otherwise.
-
-3. **Bootstrap the VPS.**
+2. **Bootstrap the VPS.**
    ```bash
-   ssh <user>@<vps-ip>
-   git clone git@github.com:oscaro-o/jevmed-erp.git /tmp/jevmed-src
+   ssh -i ~/.ssh/claude_deploy root@212.85.27.147
+   git clone git@github.com:NekoBite/jevmed-erp.git /tmp/jevmed-src
    sudo bash /tmp/jevmed-src/deploy/setup-vps.sh
    ```
-   It prints the key-console URL **once** — capture it. Recoverable afterwards only by reading
-   `VAULT_PATH` from `/opt/jevmed/shared/.env`.
+   It refuses to run on the wrong kind of host, backs up `httpd_config.conf`, and restores it
+   automatically if `https://trilumi.xyz/` stops answering. It prints the key-console URL
+   **once** — capture it. Recoverable afterwards only by reading `VAULT_PATH` from
+   `/opt/jevmed/shared/.env`.
 
-4. **Add five repository secrets** under Settings → Secrets and variables → Actions:
-   `VPS_HOST`, `VPS_USER`, `VPS_SSH_KEY` (private key), `VPS_SSH_PORT`, `VPS_APP_DIR`.
+3. **Add five repository secrets** under Settings → Secrets and variables → Actions:
+   `VPS_HOST` (`212.85.27.147`), `VPS_USER`, `VPS_SSH_KEY` (private key), `VPS_SSH_PORT` (`22`),
+   `VPS_APP_DIR` (`/opt/jevmed`).
 
-5. **Push to `main`** to trigger the first deploy.
+4. **Push to `main`** to trigger the first deploy. CI has never run; expect to iterate once.
 
-6. **Finish the passphrase hash.** On a first run `setup-vps.sh` cannot hash the passphrase
+5. **Finish the passphrase hash.** On a first run `setup-vps.sh` cannot hash the passphrase
    (the app is not deployed yet) and leaves a placeholder. After the first successful deploy:
    ```bash
    cd /opt/jevmed/current
@@ -154,7 +177,7 @@ In order. The first three are blocking; nothing can be deployed until they are d
    ```
    Until this is done the console is disabled and the assistant stays in demonstration mode.
 
-7. **Store an API key** in the console and exercise the live provider path — this is the one
+6. **Store an API key** in the console and exercise the live provider path — this is the one
    code path never run end to end.
 
 ### Open decisions
@@ -164,10 +187,15 @@ In order. The first three are blocking; nothing can be deployed until they are d
   gate first. Awaiting a decision from OH.
 - **Chairman record access.** `src/lib/roles.ts` blocks the Board Chairman from opening an
   identified patient record. Deliberate, and one line to change if the client objects.
+- **Repository owner.** Pushed to `NekoBite/jevmed-erp` because that is the authenticated
+  account; the first handoff named `oscaro-o/jevmed-erp`. Transfer if the client wants it
+  under their own account.
 
 ### Known limits
 
 - Rate limiting is per-process and in memory — needs a shared store behind multiple instances
+- The app shares a box with ~24 other sites. A bad `httpd_config.conf` edit takes them all
+  down, which is why `setup-vps.sh` backs up and canary-checks rather than editing in place
 - Single instance; a restart is a brief outage, hence the deploy health-check and auto-rollback
 - The dataset ships in the bundle (859 KB, 53 KB gzipped) — fine now, wrong if records grow 10×
 - Assistant conversations are not persisted and clear on patient change, deliberately

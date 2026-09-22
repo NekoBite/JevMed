@@ -140,10 +140,19 @@ documents are masked to a check digit, and the footer says so on every page.
 
 See [`deploy/README.md`](deploy/README.md) for the full runbook. In short:
 
-1. `sudo bash deploy/setup-vps.sh` on the VPS — installs Node, nginx, certbot,
-   the service account, the systemd unit and the TLS certificate, and generates
-   the console path and encryption key.
-2. Add an **A record** for `jevmed` in Hostinger hPanel pointing at the VPS.
+The target VPS (`212.85.27.147`) is **AlmaLinux 9 running CyberPanel +
+OpenLiteSpeed**, shared with `trilumi.xyz` and its sibling sites. There is no
+nginx on it and there cannot be — lsws already owns `:80` and `:443`. JevMed
+runs as a systemd service on `127.0.0.1:8787` with an OpenLiteSpeed vhost in
+front of it.
+
+1. Add an **A record** for `jevmed` → `212.85.27.147` in Hostinger hPanel. DNS is
+   external, so this cannot be done over SSH, and the certificate step depends
+   on it.
+2. `sudo bash deploy/setup-vps.sh` on the VPS — creates the service account, the
+   systemd unit, the OpenLiteSpeed vhost and the `acme.sh` certificate, and
+   generates the console path and encryption key. It backs up the shared lsws
+   config first and restores it automatically if the other sites stop answering.
 3. Add the five `VPS_*` secrets to the GitHub repository.
 4. Push to `main`.
 
@@ -178,6 +187,6 @@ server/
   providers.js  Anthropic and OpenAI adapters behind one interface
   prompt.js     assistant system prompt
   admin-page.html
-deploy/         systemd unit, nginx vhost, VPS bootstrap, runbook
+deploy/         systemd unit, OpenLiteSpeed vhost, VPS bootstrap, runbook
 scripts/        data generator, reference tables, smoke test
 ```

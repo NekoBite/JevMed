@@ -1,9 +1,28 @@
 # Deployment runbook
 
-Target: `jevmed.trilumi.xyz` on a Hostinger VPS, deployed from GitHub Actions.
+Target: `jevmed.trilumi.xyz` on the Trilumi Hostinger VPS, deployed from GitHub Actions.
 
-The domain `trilumi.xyz` currently uses Hostinger's nameservers
-(`ns1.dns-parking.com` / `ns2.dns-parking.com`), so DNS is managed in hPanel.
+## The host, before anything else
+
+`212.85.27.147` is a shared box. It is **AlmaLinux 9** running **CyberPanel +
+OpenLiteSpeed**, and `lsws` owns `:80` and `:443` for `trilumi.xyz` and roughly
+two dozen sibling sites. That dictates everything below:
+
+| | This host |
+|---|---|
+| Packages | `dnf` — **not** `apt` |
+| Web server | OpenLiteSpeed — **no nginx**, and none can be installed; it could not bind |
+| TLS | `acme.sh` at `/root/.acme.sh` — **not** certbot |
+| Firewall | `firewalld` — **not** ufw; 80/443 are already open |
+| Node | `/usr/bin/node` (v22), system-wide |
+| lsws config | `/usr/local/lsws/conf/httpd_config.conf`, per-vhost `conf/vhosts/<domain>/vhost.conf` |
+| Restart | `systemctl restart lsws` |
+
+JevMed runs as a normal systemd service on `127.0.0.1:8787`; OpenLiteSpeed
+reverse-proxies to it. Nothing about the other sites changes.
+
+DNS for `trilumi.xyz` is external — authoritative NS is `ns1/ns2.dns-parking.com`,
+managed in Hostinger hPanel. **New subdomains cannot be created over SSH.**
 
 ---
 
@@ -13,24 +32,25 @@ In hPanel → **Domains → DNS / Nameservers** for `trilumi.xyz`, add:
 
 | Type | Name | Points to | TTL |
 |------|------|-----------|-----|
-| A | `jevmed` | *your VPS IPv4* | 300 |
+| A | `jevmed` | `212.85.27.147` | 300 |
 
-Add an `AAAA` record for `jevmed` too if the VPS has IPv6.
-
-Confirm before going further — certbot's challenge fails if the record has not
-propagated:
+This is the one step nobody can automate from here. Confirm it before going
+further — the ACME HTTP-01 challenge fails if the record has not propagated:
 
 ```bash
 dig +short jevmed.trilumi.xyz
 ```
 
+It must print `212.85.27.147`.
+
 ## 2. Prepare the deploy key
 
-On your own machine:
+The VPS already authorises `~/.ssh/claude_deploy` for `root`. For CI, prefer a
+separate key so it can be revoked on its own:
 
 ```bash
 ssh-keygen -t ed25519 -f ~/.ssh/jevmed_deploy -C "github-actions@jevmed" -N ""
-ssh-copy-id -i ~/.ssh/jevmed_deploy.pub <user>@<vps-ip>
+ssh-copy-id -i ~/.ssh/jevmed_deploy.pub root@212.85.27.147
 ```
 
 `~/.ssh/jevmed_deploy` (the **private** half) becomes the `VPS_SSH_KEY` secret.
@@ -43,15 +63,26 @@ ssh-copy-id -i ~/.ssh/jevmed_deploy.pub <user>@<vps-ip>
 ## 3. Bootstrap the VPS
 
 ```bash
-ssh <user>@<vps-ip>
-git clone git@github.com:<you>/jevmed-erp.git /tmp/jevmed-src
+ssh -i ~/.ssh/claude_deploy root@212.85.27.147
+git clone git@github.com:NekoBite/jevmed-erp.git /tmp/jevmed-src
 sudo bash /tmp/jevmed-src/deploy/setup-vps.sh
 ```
 
-It installs Node 22, nginx and certbot; creates the `jevmed` service account and
-`/opt/jevmed`; generates the unlisted console path and the AES master key; asks
-for your vault passphrase and stores only its scrypt hash; installs the systemd
-unit, the nginx vhost and a narrow sudoers rule; and obtains the certificate.
+The script refuses to run if the host is not what it expects — no `dnf`, lsws
+not running, an active nginx, or no system-wide Node ≥ 20 all abort before
+anything is modified.
+
+It creates the `jevmed` service account and `/opt/jevmed`; generates the
+unlisted console path and the AES master key; asks for your vault passphrase and
+stores only its scrypt hash; installs the systemd unit and a narrow sudoers
+rule; adds the OpenLiteSpeed vhost; and issues the certificate with `acme.sh`.
+
+**The one shared file it edits is `httpd_config.conf`** — a `virtualHost` block
+plus one `map` line in each of the three listeners (`Default`, `SSL`,
+`SSL IPv6`). Before editing it takes a timestamped backup, and afterwards it
+restarts lsws and re-fetches `https://trilumi.xyz/`. If lsws does not come back
+or that canary stops answering, it **restores the backup, restarts, and exits
+non-zero**. Re-running the script is safe; the edit is idempotent.
 
 **Write down the console URL it prints.** It is not shown again, and it is the
 only way into the key-management console. If you lose it, read `VAULT_PATH` from
@@ -63,9 +94,12 @@ your passphrase. It says so and leaves a placeholder. After the first deploy:
 ```bash
 cd /opt/jevmed/current
 node server/hash-passphrase.js 'your passphrase'
-sudo -u jevmed sed -i "s|^VAULT_PASSPHRASE_HASH=.*|VAULT_PASSPHRASE_HASH=<paste>|" /opt/jevmed/shared/.env
+sudo sed -i "s|^VAULT_PASSPHRASE_HASH=.*|VAULT_PASSPHRASE_HASH=<paste>|" /opt/jevmed/shared/.env
 sudo systemctl restart jevmed
 ```
+
+Until that is done the console stays disabled and the assistant stays in
+demonstration mode.
 
 ## 4. Add the repository secrets
 
@@ -73,10 +107,10 @@ sudo systemctl restart jevmed
 
 | Secret | Value |
 |---|---|
-| `VPS_HOST` | VPS IP or hostname |
-| `VPS_USER` | the SSH user from §2 |
+| `VPS_HOST` | `212.85.27.147` |
+| `VPS_USER` | the SSH user from §2 (`root`, unless you made a dedicated one) |
 | `VPS_SSH_KEY` | contents of `~/.ssh/jevmed_deploy` (the private key, including both header lines) |
-| `VPS_SSH_PORT` | `22`, or your custom port |
+| `VPS_SSH_PORT` | `22` |
 | `VPS_APP_DIR` | `/opt/jevmed` |
 
 The `deploy` job targets a `production` environment, so you can add a required
@@ -97,6 +131,9 @@ Push to `main`. The workflow:
 6. health-checks, and **rolls back to the previous release automatically** if the
    check fails
 7. prunes all but the last five releases
+
+Nothing in the deploy job touches lsws. The vhost points at a fixed port; only
+the process behind it is replaced.
 
 ## 6. Alternative: have the VPS pull
 
@@ -122,7 +159,8 @@ This trades CI-side verification for a smaller blast radius. The workflow's
 
 ```bash
 sudo journalctl -u jevmed -f
-sudo tail -f /var/log/nginx/jevmed.error.log
+sudo tail -f /home/trilumi.xyz/logs/jevmed.error_log
+sudo tail -f /usr/local/lsws/logs/error.log
 ```
 
 **Restart / status**
@@ -141,6 +179,15 @@ sudo -u <deploy-user> ln -sfn /opt/jevmed/releases/<stamp> /opt/jevmed/current
 sudo systemctl restart jevmed
 ```
 
+**Rolling back the lsws config** — `setup-vps.sh` leaves
+`/usr/local/lsws/conf/httpd_config.conf.bak-jevmed-<timestamp>`:
+
+```bash
+sudo cp -a /usr/local/lsws/conf/httpd_config.conf.bak-jevmed-<ts> \
+           /usr/local/lsws/conf/httpd_config.conf
+sudo systemctl restart lsws
+```
+
 **Rotating the API key** — open the console, paste the new key, test, save. The
 old ciphertext is overwritten in place.
 
@@ -152,16 +199,20 @@ re-enter the API key in the console. The old vault file becomes unreadable,
 which is the point; the application treats an undecryptable vault as absent and
 falls back to demonstration mode rather than failing.
 
-**Certificate renewal** — certbot installs its own timer. Check it with
-`systemctl list-timers | grep certbot`.
+**Certificate renewal** — `acme.sh` installs a cron entry for `root` and the
+cert is installed with `--reloadcmd "systemctl restart lsws"`, so renewals
+reload themselves. Check with `crontab -l | grep acme` and
+`/root/.acme.sh/acme.sh --list`.
 
 ## Troubleshooting
 
 | Symptom | Cause |
 |---|---|
 | Console path returns the app instead of the sign-in card | `VAULT_PATH` or `VAULT_PASSPHRASE_HASH` is unset; the console is disabled. Check `journalctl -u jevmed` — it prints a warning line per problem at boot. |
-| Assistant replies arrive all at once, not streamed | nginx is buffering. Confirm the `location /api/chat` block with `proxy_buffering off` is present and reload nginx. |
+| Assistant replies arrive all at once, not streamed | lsws is buffering. Confirm `respBuffer 0` is still on the `jevmed_app` extprocessor in the vhost, then restart lsws. |
+| 503 from the domain, app healthy on `localhost:8787` | The vhost or a listener `map` is missing. `grep -n jevmed /usr/local/lsws/conf/httpd_config.conf` should show a `virtualHost` block and **three** `map` lines. |
+| Domain 404s or serves another site | The `map` line went into only one listener. Same check as above. |
+| `acme.sh` fails the challenge | The A record has not propagated, or points elsewhere. `dig +short jevmed.trilumi.xyz` must equal `212.85.27.147`. |
+| Deploy fails at `sudo -n systemctl restart` | The sudoers rule is missing or names a different user. Check `/etc/sudoers.d/jevmed-deploy` — it pins exact argument lists, so a changed command in the workflow will not match. |
 | "The provider rejected that key" | Wrong provider selected for the key, or the key lacks model-list permission. |
 | Assistant says it is in demonstration mode after saving a key | The master key changed since the key was stored, so the vault no longer decrypts. Re-enter the key. |
-| certbot fails the challenge | The A record has not propagated, or points elsewhere. `dig +short jevmed.trilumi.xyz` must equal the VPS IP. |
-| Deploy fails at `sudo -n systemctl restart` | The sudoers rule is missing or names a different user. Re-run `setup-vps.sh` as the deploy user, or check `/etc/sudoers.d/jevmed-deploy`. |

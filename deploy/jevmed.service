@@ -10,6 +10,11 @@ Documentation=https://jevmed.trilumi.xyz
 After=network-online.target
 Wants=network-online.target
 
+# A crash loop should stop rather than hammer the box forever. These are [Unit]
+# directives — under [Service] systemd logs "Unknown key name" and ignores them.
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
 [Service]
 Type=simple
 User=jevmed
@@ -19,9 +24,6 @@ EnvironmentFile=/opt/jevmed/shared/.env
 ExecStart=/usr/bin/node /opt/jevmed/current/server/index.js
 Restart=always
 RestartSec=3
-# A crash loop should stop rather than hammer the box forever.
-StartLimitIntervalSec=60
-StartLimitBurst=5
 
 StandardOutput=journal
 StandardError=journal
